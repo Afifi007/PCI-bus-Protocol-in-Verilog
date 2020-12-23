@@ -1,0 +1,221 @@
+
+`timescale 1ns/1ps
+module clk(clock);
+output clock;
+reg clock;
+initial 
+clock=0;
+always
+#10 clock=~clock;
+endmodule
+
+
+
+
+
+module device(AD,TRDY,FRAME,IRDY,CBE,CLK,RST,DEVSEL);
+inout [31:0]AD;
+reg [31:0] internal_mem[0:3];//0->32b'0---1->and so on
+reg [31:0] spare_mem[0:31];
+reg [31:0]mem;
+integer pointer,pointspare,pointerfill=0;
+reg read,write;reg o_fill;
+input [3:0]CBE;
+output reg TRDY,DEVSEL;
+input FRAME,IRDY,CLK,RST;
+reg [31:0] a;
+//reg [31:0] b;
+
+assign AD = ~FRAME? a:32'bz;
+
+//------------parameter------------//
+parameter Read_op=4'b0110,write_op=4'b0111;
+
+//----------make data pointer and cbe flags------------//
+always@( negedge FRAME)
+//begin
+//if(~FRAME)
+begin
+case (AD)
+32'b00000000000000000000000000000000:pointer<=0;
+32'b00000000000000000000000000000001:pointer<=1;
+32'b00000000000000000000000000000010:pointer<=2;
+32'b00000000000000000000000000000011:pointer<=3;
+default: //DEVSEL<=0;
+	 pointer<=0;
+endcase
+
+if(CBE == Read_op)
+	begin
+		 read = 1;
+		 write = 0;
+	end
+else if(CBE == write_op)
+	begin
+		 write = 1;
+		 read = 0;
+	end
+end
+//end
+
+always@(negedge CLK )
+begin
+if(FRAME==0)
+begin	
+	DEVSEL<=0;
+	if(CBE==Read_op)
+	begin
+		TRDY=0;
+		  a <= internal_mem[pointer];
+		if(pointer==4)
+			pointer=4-pointer;
+		else
+			pointer=pointer+1;
+		
+	end
+	else if(CBE==write_op)
+	begin
+	if(o_fill==0)
+		TRDY<=0;
+	else if(o_fill==1)
+		begin
+		TRDY=1;
+		
+		spare_mem[pointspare]=internal_mem[0];
+		 o_fill=0;
+		TRDY=0;
+		end
+	end
+		
+end
+end
+
+	
+always@(posedge CLK or posedge RST)
+if(RST==1)//make reset
+begin
+	TRDY<=1;DEVSEL<=1;
+end 
+else
+begin
+if(FRAME==0 && IRDY==0)
+begin
+	if(DEVSEL==0 && TRDY==0)
+	begin
+	if(write)
+		begin
+			if(CBE[3])
+				mem[31:24]=AD[31:24];
+			if(CBE[2])
+				mem[23:16]=AD[23:16];
+			if(CBE[1])
+				mem[15:8]=AD[15:8];
+			if(CBE[0])
+				mem[7:0]=AD[7:0];
+			internal_mem[pointer]=mem;
+			pointerfill=pointerfill+1;
+			if(pointerfill==4)
+				 o_fill=1;
+			if(pointer==4)
+				pointer=4-pointer;
+			else if(pointer<4)
+				pointer=pointer+1;			
+		end
+	//else if(read)
+		//begin
+			//AD=internal_mem[pointer];
+		//end
+	end
+end
+end
+
+
+endmodule
+`timescale 1ns / 1ps
+
+// Scenario 1: Assume 3 data transfer & target is not ready for 2 clock cycles & Fast DEVSEL
+`timescale 1ns / 1ps
+
+// Scenario 1: Assume 3 data transfer & Fast DEVSEL
+
+module write_tb;
+	
+reg Clk;
+reg rst;
+reg Frame;
+reg [31:0] Address;
+reg [3:0] C_BE;
+reg IRDY;
+reg TRDY;
+reg DEVSEL;
+
+wire trdy; //input
+
+Target target_tb(
+	.clk(Clk), 
+	.Fram(Frame), 
+	.IRDY(IRDY),
+	.AD(Address), 
+	.C_BE(C_BE), 
+	.Devselc(DEVSEL),
+	.rst(rst)
+	);
+
+initial begin
+    Clk = 1'b0;
+    forever #10 Clk = ~Clk; // generate a clock
+  end
+ 
+
+
+initial begin 
+
+	Frame<=1; 
+	IRDY<=1;
+	rst<=0;
+	TRDY<=trdy; 
+
+	#20 
+	rst <= 1;
+	Frame <= 0;
+	Address <= 32'b00000000000000000000000000000000; //Address
+	C_BE <= 4'b1011; // Write command
+	
+	#20
+	IRDY <=0;
+	C_BE <= 4'b0001; // BE1
+	DEVSEL <= 0;
+
+	if(TRDY ==0)
+	begin
+	Address <= 32'b00000000000000000000001000000000; //Data 1
+
+	#20
+	Address <= 32'b00000000010000000000000000000000; // Data 2
+	C_BE <= 4'b0010; // BE 2
+	Frame <= 1;
+
+	#20
+	Address <= 32'b00000100010000000000000000000000; // Data 3
+	C_BE <= 4'b0010; // BE 3
+	
+	#20
+	IRDY <= 1;
+	DEVSEL <=1;
+
+	#20; // turn-around cycle
+
+	end 		
+	
+	if(TRDY ==1)
+	#20;
+
+
+end 
+	initial begin
+		$monitor("t=%3d FRAME=%b Address=%d C_BE=%4b IRDY=%b TRDY=%, DEVSEL=%b  \n",$time, FRAME, Address, C_BE, IRDY, TRDY, DEVSEL);
+		
+	end
+endmodule
+
+
